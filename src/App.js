@@ -41,9 +41,14 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /* Fenêtres rétro                                                      */
 /* ------------------------------------------------------------------ */
 
-function Window({ title, children, footer }) {
+function Window({ title, children, footer, wide, footerClassName }) {
   return (
-    <div className="window" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className={wide ? 'window window--wide' : 'window'}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="window__bar">
         <span className="window__title">{title}</span>
         <span className="window__buttons" aria-hidden="true">
@@ -53,7 +58,15 @@ function Window({ title, children, footer }) {
         </span>
       </div>
       <div className="window__body">{children}</div>
-      {footer ? <div className="window__footer">{footer}</div> : null}
+      {footer ? (
+        <div
+          className={
+            footerClassName ? `window__footer ${footerClassName}` : 'window__footer'
+          }
+        >
+          {footer}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -150,45 +163,130 @@ function ErrorWindow({ message, onClose }) {
   );
 }
 
+const ORDER_EMAIL = 'maxremotefr@gmail.com';
+
+/* Récapitulatif en texte brut : c'est exactement ce qui est copié ou envoyé. */
+function buildRecap(image, size, price) {
+  const dpi = printDpi(image.width, image.height, size.widthCm, size.heightCm);
+  const surface = formatNumber(areaM2(size.widthCm, size.heightCm), 3);
+
+  return [
+    'DERNIER PRINT — DEMANDE DE COMMANDE',
+    '===================================',
+    '',
+    'Produit  : Tirage en aluminium',
+    `Format   : ${size.widthCm} × ${size.heightCm} cm`,
+    `Surface  : ${surface} m²`,
+    `Prix     : ${formatPrice(price)}`,
+    `           ${surface} m² × ${formatNumber(PRICE_PER_M2, 2)} € TTC/m²`,
+    '',
+    `Fichier  : ${image.name}`,
+    `Image    : ${formatPixels(image.width)} × ${formatPixels(image.height)} px`,
+    `Ratio    : ${formatRatio(image.width, image.height)}`,
+    `DPI      : ${image.dpi} (fichier${image.dpiEmbedded ? '' : ', par défaut'})`,
+    `           ${dpi} (au format choisi)`,
+  ].join('\n');
+}
+
 function OrderWindow({ image, size, price, onClose }) {
+  const recap = useMemo(() => buildRecap(image, size, price), [image, size, price]);
+  const [copyState, setCopyState] = useState('idle'); // idle | done | failed
+  const recapRef = useRef(null);
+  const resetRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (resetRef.current) clearTimeout(resetRef.current);
+    },
+    []
+  );
+
+  const copy = useCallback(async () => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(recap);
+      } else {
+        // Repli hors contexte sécurisé : on sélectionne le bloc et on copie.
+        const node = recapRef.current;
+        if (!node) throw new Error('bloc introuvable');
+
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        const ok = document.execCommand('copy');
+        selection.removeAllRanges();
+        if (!ok) throw new Error('copie refusée');
+      }
+      setCopyState('done');
+    } catch (err) {
+      setCopyState('failed');
+    }
+
+    if (resetRef.current) clearTimeout(resetRef.current);
+    resetRef.current = setTimeout(() => setCopyState('idle'), 2600);
+  }, [recap]);
+
+  const subject = `Commande — Tirage aluminium ${size.widthCm} × ${size.heightCm} cm`;
+  const body = `${recap}\n\nBonjour,\nJe souhaite commander ce tirage. Mon image est jointe à ce message.\n`;
+  const mailto = `mailto:${ORDER_EMAIL}?subject=${encodeURIComponent(
+    subject
+  )}&body=${encodeURIComponent(body)}`;
+
+  const copyLabel =
+    copyState === 'done'
+      ? 'Copié !'
+      : copyState === 'failed'
+      ? 'Copie refusée — sélectionnez le texte'
+      : 'Copier le récapitulatif';
+
   return (
     <Overlay>
       <Window
         title="COMMANDE"
+        wide
+        footerClassName="window__footer--stack"
         footer={
-          <button type="button" className="btn" onClick={onClose}>
-            Fermer
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn btn--block btn--lg"
+              onClick={copy}
+            >
+              {copyLabel}
+            </button>
+            <div className="order__row">
+              <a className="btn btn--grow" href={mailto}>
+                Envoyer par mail
+              </a>
+              <button type="button" className="btn" onClick={onClose}>
+                Fermer
+              </button>
+            </div>
+          </>
         }
       >
-        <p className="dialog__text">Récapitulatif de votre tirage.</p>
-        <dl className="specs specs--dialog">
-          <div className="specs__row">
-            <dt>Produit</dt>
-            <dd>Tirage en aluminium</dd>
-          </div>
-          <div className="specs__row">
-            <dt>Fichier</dt>
-            <dd className="specs__ellipsis">{image.name}</dd>
-          </div>
-          <div className="specs__row">
-            <dt>Format</dt>
-            <dd>
-              {size.widthCm} × {size.heightCm} cm
-            </dd>
-          </div>
-          <div className="specs__row">
-            <dt>Surface</dt>
-            <dd>{formatNumber(areaM2(size.widthCm, size.heightCm), 3)} m²</dd>
-          </div>
-          <div className="specs__row">
-            <dt>Total</dt>
-            <dd>{formatPrice(price)}</dd>
-          </div>
-        </dl>
+        <p className="dialog__text">
+          Récapitulatif de votre tirage. Copiez-le ou envoyez-le nous par mail.
+        </p>
+
+        <pre className="recap" ref={recapRef}>
+          {recap}
+        </pre>
+
+        <p className="recap__status" role="status">
+          {copyState === 'done'
+            ? 'Récapitulatif copié dans le presse-papiers.'
+            : copyState === 'failed'
+            ? 'Le navigateur a refusé la copie : sélectionnez le texte ci-dessus.'
+            : ' '}
+        </p>
+
         <p className="dialog__note">
-          Le paiement n&apos;est pas encore branché : cette étape reste à
-          connecter au tunnel de commande.
+          Le mail part vers {ORDER_EMAIL}. Pensez à y joindre votre image : un
+          lien mailto ne peut pas transporter le fichier.
         </p>
       </Window>
     </Overlay>

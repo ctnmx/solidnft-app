@@ -50,5 +50,6 @@
   },
   "browser": {
     "crypto": false
-  }
+  },
+  "homepage": "."
 }
